@@ -1,0 +1,172 @@
+---
+title: "placebo_vs_nocebo"
+author: "Kip Elder"
+date: "8/31/2021"
+output: html
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# load libraries
+library(tidyverse)
+library(labelled)
+library(reshape2)
+library(coin)
+library(rstatix)
+library(gmodels)
+library(moments)
+library(kableExtra)
+
+#  Load data
+df <- read_csv("./data/data_numeric.csv")
+
+```
+
+## Clean data
+
+```{r}
+
+df <- df %>% 
+  rename(test = Q11,
+         n_40hz_dizziness = n_40hz_rating_1,
+         n_40hz_headache = n_40hz_rating_2,
+         n_40hz_nausea = n_40hz_rating_3,
+         n_40hz_relaxed = n_40hz_rating_4,
+         n_40hz_mood = n_40hz_rating_5,
+         n_40hz_focus = n_40hz_rating_6,
+         nil_40hz_dizziness = no_info_40hz_rating_1,
+         nil_40hz_headache = no_info_40hz_rating_2,
+         nil_40hz_nausea = no_info_40hz_rating_3,
+         nil_40hz_relaxed = no_info_40hz_rating_4,
+         nil_40hz_mood = no_info_40hz_rating_5,
+         nil_40hz_focus = no_info_40hz_rating_6,
+         p_40hz_dizziness = ps_40hz_rating_1,
+         p_40hz_headache = ps_40hz_rating_2,
+         p_40hz_nausea = ps_40hz_rating_3,
+         p_40hz_relaxed = ps_40hz_rating_4,
+         p_40hz_mood = ps_40hz_rating_5,
+         p_40hz_focus = ps_40hz_rating_6,
+         pb_40hz_dizziness = pb_40Hz_ratings_1,
+         pb_40hz_headache = pb_40Hz_ratings_2,
+         pb_40hz_nausea = pb_40Hz_ratings_3,
+         pb_40hz_relaxed = pb_40Hz_ratings_4,
+         pb_40hz_mood = pb_40Hz_ratings_5,
+         pb_40hz_focus = pb_40Hz_ratings_6,
+         dizziness_brown = brown_ratings_1,
+         headache_brown = brown_ratings_2,
+         nausea_brown = brown_ratings_3,
+         relaxed_brown = brown_ratings_4,
+         mood_brown = brown_ratings_5,
+         focus_brown = brown_ratings_6,
+         nocebo_40hz = `Q60_Page Submit`,
+         nocebo_brown = `Q40_Page Submit`,
+         nil_40hz = `Q80_Page Submit`, 
+         nil_brown = `Q84_Page Submit`, 
+         placebo_40hz = `Q47_Page Submit`,
+         placebo_brown = `Q63_Page Submit`,
+         blocker_40hz = `Q136_Page Submit`,  
+         blocker_brown = `Q142_Page Submit`,
+         expectancy_prior = prior_expectancy,
+         expectancy_40hz = `40hz_expectancy`,
+         expectancy_brown = brown_expectancy,
+         expectancy_post = post_expectancy,
+         orange = Q28)
+
+# Convert from character to numeric
+df <- df %>% 
+  mutate(across(test:age, as.numeric))
+
+glimpse(df)
+
+# filter for exclusion criteria
+df <- df[-65, ] %>% 
+  filter(test == 4,
+         age != "NA",
+         gender != "NA",
+         SC0 == 1,
+         nocebo_40hz >= 120 | nil_40hz >= 120 | placebo_40hz >= 120 | blocker_40hz >= 120 | nocebo_brown >= 120 | nil_brown >= 120 | placebo_brown >= 120 | blocker_brown >= 120)
+
+# Transform gender to factor with named levels
+df$gender <- factor(df$gender)
+levels(df$gender) <- c("male", "female", "other")
+
+# Create conditions variable from the four conditions (placebo, nocebo, placebo blocker, and no info)
+df$condition_nocebo <- ifelse(df$nocebo_40hz > 1, "nocebo", NA) 
+df$condition_placebo <- ifelse(df$placebo_40hz > 1, "placebo", NA)
+df$condition_nil <- ifelse(df$nil_40hz > 1, "no_info", NA)
+df$condition_blocker <- ifelse(df$blocker_40hz > 1, "blocker", NA)
+
+df <- df %>% 
+  mutate(condition = coalesce(df$condition_blocker, df$condition_nil, df$condition_nocebo, df$condition_placebo)) 
+
+df$condition <- as.factor(df$condition)
+
+# Merge 40hz scores via side effect (brownian scores already combined).
+df <- df %>% 
+  mutate(dizziness_40hz = (coalesce(n_40hz_dizziness, pb_40hz_dizziness, p_40hz_dizziness, nil_40hz_dizziness)-1),
+         headache_40hz = (coalesce(n_40hz_headache, pb_40hz_headache, p_40hz_headache, nil_40hz_headache)-1),
+         nausea_40hz = (coalesce(n_40hz_nausea, pb_40hz_nausea, p_40hz_nausea, nil_40hz_nausea)-1),
+         relaxed_40hz = (coalesce(n_40hz_relaxed, pb_40hz_relaxed, p_40hz_relaxed, nil_40hz_relaxed)-1),
+         mood_40hz = (coalesce(n_40hz_mood, pb_40hz_mood, p_40hz_mood, nil_40hz_mood)-1),
+         focus_40hz = (coalesce(n_40hz_focus, pb_40hz_focus, p_40hz_focus, nil_40hz_focus)-1))
+
+# Sum scores for 40hz positive
+df$sum_40hz_positive <- df %>% 
+  dplyr::select(relaxed_40hz, mood_40hz, focus_40hz) %>% 
+  rowSums()
+
+# Sum scores for brownian positive
+df$sum_brown_positive <- df %>% 
+  dplyr::select(relaxed_brown, mood_brown, focus_brown) %>% 
+  rowSums()
+
+# Sum scores for 40hz negative
+df$sum_40hz_negative <- df %>% 
+  dplyr::select(dizziness_40hz, nausea_40hz, headache_40hz) %>% 
+  rowSums()
+
+# Sum scores for brown negative
+df$sum_brown_negative <- df %>% 
+  dplyr::select(dizziness_brown, nausea_brown, headache_brown) %>% 
+  rowSums()
+
+names(df)
+
+# Select relevant columns
+df <- df %>% 
+  dplyr::select(condition, 
+         dizziness_40hz:focus_40hz,
+         dizziness_brown:focus_brown,
+         expectancy_prior, expectancy_40hz, expectancy_brown, expectancy_post,
+         noise_sensitivity_1:noise_sensitivity_5,
+         gender, age,
+         sum_40hz_positive:sum_brown_negative)
+
+head(df)
+
+```
+
+## Descriptive statistics
+
+```{r, results = 'asis'}
+
+
+
+
+# Median and SD age per condition
+df.stats <- df %>% 
+  dplyr::group_by(condition) %>% 
+  dplyr::summarize(
+    N = n(),
+    median_age = median(age),
+    SD_age = sd(age))
+
+df.stats %>% 
+  knitr::kable(caption = "Table 1. Age ",
+               digits = 2) %>% 
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hold_position"), full_width = FALSE)
+
+```
+
+
